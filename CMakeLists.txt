@@ -16,6 +16,9 @@ endif()
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Postifx
+set(CMAKE_DEBUG_POSTFIX "_dbg")
+
 # Look up threading library (usually pthread)
 set(CMAKE_THREAD_PREFER_PTHREAD TRUE)
 set(THREADS_PREFER_PTHREAD_FLAG TRUE)
@@ -28,7 +31,7 @@ if(BUILD_USING_CONAN)
     conan_basic_setup()
 endif()
 
-option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
+option(BUILD_SHARED_LIBS "Build shared libraries" ON)
 
 option(BUILD_TESTS "Build unit tests" OFF)
 if(BUILD_TESTS)
