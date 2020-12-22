@@ -1,8 +1,10 @@
 set(_its_asn1_source_file "asn1c_its_sources.txt")
+set(_pki_asn1_source_file "asn1c_pki_sources.txt")
 set(_sec_asn1_source_file "asn1c_security_sources.txt")
 set(_support_asn1_source_file "asn1c_support_sources.txt")
 
 set(_its_asn1_dir "${CMAKE_CURRENT_SOURCE_DIR}/its")
+set(_pki_asn1_dir "${CMAKE_CURRENT_SOURCE_DIR}/pki")
 set(_sec_asn1_dir "${CMAKE_CURRENT_SOURCE_DIR}/security")
 set(_support_asn1_dir "${CMAKE_CURRENT_SOURCE_DIR}/support")
 
@@ -17,6 +19,17 @@ if(VANETZA_ASN1_WITH_ASN1C)
         ${PROJECT_SOURCE_DIR}/asn1/TS102894-2v131-CDD.asn
         ${PROJECT_SOURCE_DIR}/asn1/EN302637-2v141-CAM.asn
         ${PROJECT_SOURCE_DIR}/asn1/EN302637-3v131-DENM.asn
+        ${PROJECT_SOURCE_DIR}/asn1/ISO_TS_19091_CPM.asn
+        ${PROJECT_SOURCE_DIR}/asn1/TR103562v211.asn
+    )
+    set(_pki_asn1_files
+        ${PROJECT_SOURCE_DIR}/asn1/TS102941v131-BaseTypes.asn
+        ${PROJECT_SOURCE_DIR}/asn1/TS102941v131-MessagesCa.asn
+        ${PROJECT_SOURCE_DIR}/asn1/TS102941v131-TrustLists.asn
+        ${PROJECT_SOURCE_DIR}/asn1/TS102941v131-TypesAuthorization.asn
+        ${PROJECT_SOURCE_DIR}/asn1/TS102941v131-TypesAuthorizationValidation.asn
+        ${PROJECT_SOURCE_DIR}/asn1/TS102941v131-TypesCaManagement.asn
+        ${PROJECT_SOURCE_DIR}/asn1/TS102941v131-TypesEnrolment.asn
     )
     set(_sec_asn1_files
         ${PROJECT_SOURCE_DIR}/asn1/TS103097v131.asn
@@ -49,6 +62,18 @@ if(VANETZA_ASN1_WITH_ASN1C)
             -P collect_asn1c_sources.cmake
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} VERBATIM)
 
+    add_custom_command(OUTPUT ${_pki_asn1_dir}
+        DEPENDS ${_pki_asn1_files}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${_pki_asn1_dir}
+        COMMAND ${ASN1C_EXECUTABLE} ${_asn1c_flags} -R -D ${_pki_asn1_dir} ${_pki_asn1_files} ${_sec_asn1_files}
+        COMMENT "Generating code from PKI (TS 102 941) ASN.1 modules" VERBATIM
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    add_custom_command(OUTPUT "${_pki_asn1_source_file}"
+        DEPENDS ${_pki_asn1_dir}
+        COMMAND ${CMAKE_COMMAND} -DASN1C_OUTPUT_DIR=pki -DASN1C_SOURCE_FILE=${_pki_asn1_source_file}
+            -P collect_asn1c_sources.cmake
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} VERBATIM)
+
     add_custom_command(OUTPUT "${_sec_asn1_dir}"
         DEPENDS ${_sec_asn1_files}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${_sec_asn1_dir}
@@ -63,6 +88,7 @@ if(VANETZA_ASN1_WITH_ASN1C)
     add_custom_target(generate_asn1c DEPENDS
         "${_support_asn1_dir}" "${_support_asn1_source_file}"
         "${_its_asn1_dir}" "${_its_asn1_source_file}"
+        "${_pki_asn1_dir}" "${_pki_asn1_source_file}"
         "${_sec_asn1_dir}" "${_sec_asn1_source_file}"
         VERBATIM)
     add_custom_command(TARGET generate_asn1c POST_BUILD
@@ -75,6 +101,11 @@ if(VANETZA_ASN1_WITH_ASN1C)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/patch_asn1c_generated.cmake
         COMMENT "Patching generated ITS application asn1c files"
         WORKING_DIRECTORY ${_its_asn1_dir} VERBATIM)
+    add_custom_command(TARGET generate_asn1c POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -DPROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/patch_asn1c_generated.cmake
+        COMMENT "Patching generated PKI asn1c files"
+        WORKING_DIRECTORY ${_pki_asn1_dir} VERBATIM)
     add_custom_command(TARGET generate_asn1c POST_BUILD
         COMMAND ${CMAKE_COMMAND} -DPROJECT_SOURCE_DIR=${PROJECT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/patch_asn1c_generated.cmake
@@ -92,6 +123,10 @@ if(VANETZA_ASN1_WITH_ASN1C)
           -DASN1C_SOURCE_FILE=${_its_asn1_source_file}
           -P clean_asn1c.cmake
         COMMAND ${CMAKE_COMMAND}
+          -DASN1C_OUTPUT_DIR=${_pki_asn1_dir}
+          -DASN1C_SOURCE_FILE=${_pki_asn1_source_file}
+          -P clean_asn1c.cmake
+        COMMAND ${CMAKE_COMMAND}
           -DASN1C_OUTPUT_DIR=${_sec_asn1_dir}
           -DASN1C_SOURCE_FILE=${_sec_asn1_source_file}
           -P clean_asn1c.cmake
@@ -99,40 +134,41 @@ if(VANETZA_ASN1_WITH_ASN1C)
     add_dependencies(generate_asn1c clean_asn1c)
 endif()
 
+function(add_asn1_component NAME)
+    set(_source_file "asn1c_${NAME}_sources.txt")
+    file(STRINGS "${_source_file}" _sources REGEX "^[^#]+")
+    if (NOT _sources)
+        message(AUTHOR_WARNING "source file ${_source_file} is empty, fix this now!")
+    endif()
+    add_vanetza_component(asn1_${NAME} ${_sources})
+    set_target_properties(asn1_${NAME} PROPERTIES C_STANDARD 11)
 
-set(CXX_SOURCES asn1c_wrapper.cpp)
-file(STRINGS "${_its_asn1_source_file}" ITS_ASN1C_SOURCES REGEX "^[^#]+")
-file(STRINGS "${_support_asn1_source_file}" SUPPORT_ASN1C_SOURCES REGEX "^[^#]+")
+    if ("${NAME}" STREQUAL "support")
+        target_include_directories(asn1_support PUBLIC
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/support>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/vanetza/asn1/support>)
+    else()
+        target_link_libraries(asn1_${NAME} PUBLIC asn1_support)
+    endif()
 
-add_vanetza_component(asn1 ${CXX_SOURCES} ${ITS_ASN1C_SOURCES} ${SUPPORT_ASN1C_SOURCES})
-target_include_directories(asn1 PUBLIC
-    $<BUILD_INTERFACE:${_support_asn1_dir}>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/vanetza/asn1/support}>)
-target_link_libraries(asn1 PUBLIC Boost::boost)
-set_target_properties(asn1 PROPERTIES C_STANDARD 11)
+    # Silence warnings in code generated by asn1c
+    if (CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        set_property(SOURCE ${_sources} APPEND PROPERTY COMPILE_OPTIONS "-Wno-parentheses-equality")
+    endif()
 
-install(DIRECTORY ${_support_asn1_dir} ${_its_asn1_dir}
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/vanetza/asn1
-    FILES_MATCHING PATTERN "*.h")
+    if(VANETZA_INSTALL)
+        install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/${NAME}
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/vanetza/asn1
+            FILES_MATCHING PATTERN "*.h")
+    endif()
+endfunction()
 
+add_asn1_component(support)
+add_asn1_component(its)
+add_asn1_component(security)
+add_asn1_component(pki)
 
-file(STRINGS "${_sec_asn1_source_file}" SEC_ASN1C_SOURCES REGEX "^[^#]+")
-if (SEC_ASN1C_SOURCES)
-    add_library(asn1_security STATIC ${SEC_ASN1C_SOURCES})
-    target_include_directories(asn1_security PUBLIC
-        $<BUILD_INTERFACE:${_support_asn1_dir}>
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/vanetza/asn1/support}>)
-    set_target_properties(asn1_security PROPERTIES POSITION_INDEPENDENT_CODE ON C_STANDARD 11)
-else()
-    message(AUTHOR_WARNING "source file ${_sec_asn1_source_file} is empty, fix this now!")
-endif()
-
-
-# Silence warnings in code generated by asn1c
-if (CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    set_property(SOURCE ${SUPPORT_ASN1C_SOURCES} ${ITS_ASN1C_SOURCES} ${SEC_ASN1C_SOURCES}
-        APPEND PROPERTY COMPILE_OPTIONS "-Wno-parentheses-equality")
-endif()
+add_vanetza_component(asn1 asn1c_wrapper.cpp)
+target_link_libraries(asn1 PUBLIC asn1_its Boost::boost)
 
 add_test_subdirectory(tests)
-

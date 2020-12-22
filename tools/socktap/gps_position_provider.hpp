@@ -1,25 +1,26 @@
 #ifndef GPS_POSITION_PROVIDER_HPP_GYN3GVQA
 #define GPS_POSITION_PROVIDER_HPP_GYN3GVQA
 
+#include "positioning.hpp"
 #include <vanetza/common/clock.hpp>
 #include <vanetza/common/position_provider.hpp>
+#include <boost/asio/io_service.hpp>
 #include <boost/asio/steady_timer.hpp>
-#include <stdexcept>
 #include <string>
 #include <gps.h>
 
 class GpsPositionProvider : public vanetza::PositionProvider
 {
 public:
-    class gps_error : public std::runtime_error
+    class GpsPositioningException : public PositioningException
     {
     protected:
-        gps_error(int);
+        GpsPositioningException(int);
         friend class GpsPositionProvider;
     };
 
-    GpsPositionProvider(boost::asio::steady_timer& timer);
-    GpsPositionProvider(boost::asio::steady_timer& timer, const std::string& hostname, const std::string& port);
+    GpsPositionProvider(boost::asio::io_service& io);
+    GpsPositionProvider(boost::asio::io_service& io, const std::string& hostname, const std::string& port);
     ~GpsPositionProvider();
 
     const vanetza::PositionFix& position_fix() override;
@@ -28,9 +29,8 @@ public:
 private:
     void schedule_timer();
     void on_timer(const boost::system::error_code& ec);
-    vanetza::Clock::time_point convert(timestamp_t) const;
 
-    boost::asio::steady_timer& timer_;
+    boost::asio::steady_timer timer_;
     gps_data_t gps_data;
     vanetza::PositionFix fetched_position_fix;
 };
@@ -38,8 +38,8 @@ private:
 namespace gpsd
 {
 
-constexpr char* default_port = DEFAULT_GPSD_PORT;
-constexpr char* shared_memory = GPSD_SHARED_MEMORY;
+constexpr const char* default_port = DEFAULT_GPSD_PORT;
+constexpr const char* shared_memory = GPSD_SHARED_MEMORY;
 
 } // namespace gpsd
 

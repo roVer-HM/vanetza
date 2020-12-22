@@ -4,11 +4,13 @@
 #include <vanetza/common/byte_order.hpp>
 #include <vanetza/common/hook.hpp>
 #include <vanetza/common/its_aid.hpp>
+#include <vanetza/access/ethertype.hpp>
 #include <vanetza/geonet/beacon_header.hpp>
 #include <vanetza/geonet/cbf_packet_buffer.hpp>
 #include <vanetza/geonet/common_header.hpp>
 #include <vanetza/geonet/extended_pdu.hpp>
 #include <vanetza/geonet/gbc_header.hpp>
+#include <vanetza/geonet/gbc_memory.hpp>
 #include <vanetza/geonet/interface.hpp>
 #include <vanetza/geonet/location_table.hpp>
 #include <vanetza/geonet/mib.hpp>
@@ -47,7 +49,7 @@ namespace dcc
 namespace geonet
 {
 
-extern const uint16be_t ether_type;
+extern const access::EtherType ether_type;
 
 class DccFieldGenerator;
 class IndicationContext;
@@ -394,6 +396,16 @@ private:
     void pass_up(const DataIndication&, UpPacketPtr);
 
     /**
+     * \brief Decide if GBC packet shall be passed up to transport layer.
+     *
+     * \param within_destination is router located within destination area
+     * \param gbc GeoBroadcast header
+     *
+     * \return true if packet shall be passed up
+     */
+    bool decide_pass_up(bool within_destination, const GeoBroadcastHeader& gbc);
+
+    /**
      * \brief Helper method to handle duplicate addresses.
      * If own address collides with the address of a received packet
      * Router's address is set to a new random address.
@@ -534,6 +546,7 @@ private:
     SequenceNumber m_local_sequence_number;
     Repeater m_repeater;
     std::mt19937 m_random_gen;
+    GbcMemory m_gbc_memory;
 };
 
 /**

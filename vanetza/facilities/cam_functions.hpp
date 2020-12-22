@@ -5,6 +5,7 @@
 #include <vanetza/asn1/its/AltitudeValue.h>
 #include <vanetza/asn1/its/Heading.h>
 #include <vanetza/asn1/its/ReferencePosition.h>
+#include <vanetza/common/position_fix.hpp>
 #include <vanetza/security/cam_ssp.hpp>
 #include <vanetza/units/angle.hpp>
 #include <vanetza/units/length.hpp>
@@ -58,12 +59,17 @@ bool is_available(const Heading&);
 bool is_available(const ReferencePosition_t&);
 
 /**
+ * Copy position information into a ReferencePosition structure from CDD
+ */
+void copy(const PositionFix&, ReferencePosition&);
+
+/**
  * Convert altitude to AltitudeValue from CDD
  */
 AltitudeValue_t to_altitude_value(units::Length);
 
 /**
- * Convert altitude confidencet to AltitudeConfidence from CDD
+ * Convert altitude confidence to AltitudeConfidence from CDD
  */
 AltitudeConfidence_t to_altitude_confidence(units::Length);
 
@@ -74,6 +80,18 @@ AltitudeConfidence_t to_altitude_confidence(units::Length);
  * \return true if no forbidden data elements are included
  */
 bool check_service_specific_permissions(const asn1::Cam& cam, security::CamPermissions ssp);
+
+/**
+ * Print CAM content with indentation of nested fields
+ * \param os output stream
+ * \param cam CA message
+ * \param indent indentation marker, by default one tab per level
+ * \param start initial level of indentation
+ *
+ * This function is an idea of Erik de Britto e Silva (erikbritto@github)
+ * from University of Antwerp - erik.debrittoesilva@uantwerpen.be
+ */
+void print_indented(std::ostream& os, const asn1::Cam& cam, const std::string& indent = "\t", unsigned start = 0);
 
 } // namespace facilities
 } // namespace vanetza

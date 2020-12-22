@@ -12,6 +12,7 @@
 #include <vanetza/units/length.hpp>
 #include <vanetza/units/time.hpp>
 #include <vanetza/geonet/router.hpp>
+#include <vanetza/geonet/cbf_counter.hpp>
 #include <vanetza/geonet/data_confirm.hpp>
 #include <vanetza/geonet/dcc_field_generator.hpp>
 #include <vanetza/geonet/duplicate_packet_list.hpp>
@@ -106,12 +107,24 @@ PDU& get_pdu(const std::tuple<std::unique_ptr<PDU>, std::unique_ptr<DownPacket>>
     return *pdu;
 }
 
+std::unique_ptr<CbfCounter> create_cbf_counter(Runtime& rt, const MIB& mib)
+{
+    std::unique_ptr<CbfCounter> counter;
+    if (mib.vanetzaFadingCbfCounter) {
+        counter.reset(new CbfCounterFading(rt, units::clock_cast(mib.vanetzaFadingCbfCounterLifetime)));
+    } else {
+        counter.reset(new CbfCounterContending());
+    }
+    assert(counter);
+    return counter;
+}
+
 } // namespace
 
 using units::clock_cast;
 using PendingPacketGbc = PendingPacket<GbcPdu>;
 
-const uint16be_t ether_type = host_cast<uint16_t>(0x8947);
+const access::EtherType ether_type = access::ethertype::GeoNetworking;
 
 Router::Router(Runtime& rt, const MIB& mib) :
     m_mib(mib),
@@ -124,6 +137,7 @@ Router::Router(Runtime& rt, const MIB& mib) :
     m_uc_forward_buffer(mib.itsGnUcForwardingPacketBufferSize * 1024),
     m_cbf_buffer(m_runtime,
             [](PendingPacketGbc&& packet) { packet.process(); },
+            create_cbf_counter(rt, mib),
             mib.itsGnCbfPacketBufferSize * 1024),
     m_local_sequence_number(0),
     m_repeater(m_runtime,
@@ -141,6 +155,8 @@ Router::Router(Runtime& rt, const MIB& mib) :
             reset_beacon_timer(clock_cast(first_beacon));
         }
     }
+
+    m_gbc_memory.capacity(m_mib.vanetzaGbcMemoryCapacity);
 }
 
 Router::~Router()
@@ -790,10 +806,12 @@ NextHop Router::non_area_contention_based_forwarding(PendingPacketForwarding&& p
 {
     NextHop nh;
     const GeoBroadcastHeader& gbc = packet.pdu().extended();
+    const auto cbf_id = identifier(gbc.source_position.gn_addr, gbc.sequence_number);
+
     // immediately broadcast packet if it is originating from local router
     if (!sender) {
         nh.transmit(std::move(packet), cBroadcastMacAddress);
-    } else if (m_cbf_buffer.try_drop(gbc.source_position.gn_addr, gbc.sequence_number)) {
+    } else if (m_cbf_buffer.remove(cbf_id)) {
         // packet has been in CBF buffer (and is now dropped)
         nh.discard();
     } else {
@@ -809,7 +827,7 @@ NextHop Router::non_area_contention_based_forwarding(PendingPacketForwarding&& p
             if (dist_sender > dist_local) {
                 CbfPacket cbf { std::move(packet), *sender };
                 const auto progress = dist_sender - dist_local;
-                m_cbf_buffer.enqueue(std::move(cbf), clock_cast(timeout_cbf(progress)));
+                m_cbf_buffer.add(std::move(cbf), clock_cast(timeout_cbf(progress)));
                 nh.buffer();
 
             } else {
@@ -818,7 +836,7 @@ NextHop Router::non_area_contention_based_forwarding(PendingPacketForwarding&& p
         } else {
             CbfPacket cbf { std::move(packet), *sender };
             const auto to_cbf_max = m_mib.itsGnCbfMaxTime;
-            m_cbf_buffer.enqueue(std::move(cbf), clock_cast(to_cbf_max));
+            m_cbf_buffer.add(std::move(cbf), clock_cast(to_cbf_max));
             nh.buffer();
         }
     }
@@ -829,14 +847,15 @@ NextHop Router::area_contention_based_forwarding(PendingPacketForwarding&& packe
 {
     NextHop nh;
     const GeoBroadcastHeader& gbc = packet.pdu().extended();
+    const auto cbf_id = identifier(gbc.source_position.gn_addr, gbc.sequence_number);
 
     if (!sender) {
         nh.transmit(std::move(packet), cBroadcastMacAddress);
-    } else if (m_cbf_buffer.try_drop(gbc.source_position.gn_addr, gbc.sequence_number)) {
+    } else if (m_cbf_buffer.remove(cbf_id) || m_cbf_buffer.counter(cbf_id) >= m_mib.vanetzaCbfMaxCounter) {
         nh.discard();
     } else {
         const units::Duration timeout = timeout_cbf(*sender);
-        m_cbf_buffer.enqueue(CbfPacket { std::move(packet), *sender }, clock_cast(timeout));
+        m_cbf_buffer.add(CbfPacket { std::move(packet), *sender }, clock_cast(timeout));
         nh.buffer();
     }
     return nh;
@@ -881,23 +900,23 @@ NextHop Router::area_advanced_forwarding(PendingPacketForwarding&& packet, const
         const HeaderType ht = packet.pdu().common().header_type;
         const Area destination_area = gbc.destination(ht);
         const std::size_t max_counter = m_mib.vanetzaCbfMaxCounter;
-        auto cbf = m_cbf_buffer.fetch(gbc.source_position.gn_addr, gbc.sequence_number);
+        const auto cbf_id = identifier(gbc.source_position.gn_addr, gbc.sequence_number);
+        const CbfPacket* cbf_packet = m_cbf_buffer.find(cbf_id);
 
-        if (cbf) {
+        if (cbf_packet) {
             // packet is already buffered
-            if (cbf->counter() >= max_counter) {
+            if (m_cbf_buffer.counter(cbf_id) >= max_counter) {
                 // stop contending if counter is exceeded
-                m_cbf_buffer.try_drop(gbc.source_position.gn_addr, gbc.sequence_number);
+                m_cbf_buffer.remove(cbf_id);
                 nh.discard();
-            } else if (!outside_sectorial_contention_area(cbf->sender(), ll->sender)) {
+            } else if (!outside_sectorial_contention_area(cbf_packet->sender(), ll->sender)) {
                 // within sectorial area
                 // - sender S = sender of buffered packet
                 // - forwarder F = sender of now received packet
-                m_cbf_buffer.try_drop(gbc.source_position.gn_addr, gbc.sequence_number);
+                m_cbf_buffer.remove(cbf_id);
                 nh.discard();
             } else {
-                ++cbf->counter();
-                m_cbf_buffer.enqueue(std::move(*cbf), clock_cast(timeout_cbf(ll->sender)));
+                m_cbf_buffer.update(cbf_id, clock_cast(timeout_cbf(ll->sender)));
                 nh.buffer();
             }
         } else {
@@ -911,18 +930,18 @@ NextHop Router::area_advanced_forwarding(PendingPacketForwarding&& packet, const
                         [](PendingPacketForwarding::Packet&&, const MacAddress&) {};
                     PendingPacketForwarding noop { std::move(packet).packet(), noop_fn };
                     CbfPacket cbf { std::move(noop), ll->sender };
-                    m_cbf_buffer.enqueue(std::move(cbf), clock_cast(m_mib.itsGnCbfMaxTime));
+                    m_cbf_buffer.add(std::move(cbf), clock_cast(m_mib.itsGnCbfMaxTime));
                 } else {
                     // no immediate broadcast by greedy forwarding
                     CbfPacket cbf { std::move(packet), ll->sender };
-                    m_cbf_buffer.enqueue(std::move(cbf), clock_cast(m_mib.itsGnCbfMaxTime));
+                    m_cbf_buffer.add(std::move(cbf), clock_cast(m_mib.itsGnCbfMaxTime));
                 }
                 // next hop (nh) conveys result of greedy forwarding algorithm
             } else {
                 // classical CBF (timeout_cbf_gbc looks up sender's position)
                 nh.buffer();
                 CbfPacket cbf { std::move(packet), ll->sender };
-                m_cbf_buffer.enqueue(std::move(cbf), clock_cast(timeout_cbf(ll->sender)));
+                m_cbf_buffer.add(std::move(cbf), clock_cast(timeout_cbf(ll->sender)));
             }
         }
     }
@@ -976,7 +995,7 @@ bool Router::process_extended(const ExtendedPduConstRefs<ShbHeader>& pdu, const 
     source_entry.update_pdr(packet_size, m_mib.itsGnMaxPacketDataRateEmaBeta);
 
     // step 6: set SO LocTE to neighbour
-    source_entry.set_neighbour(true);
+    source_entry.set_neighbour(true, m_mib.vanetzaNeighbourFlagExpiry);
 
     // media-dependent update of LocTEX_G5 (see TS 102 636-4-2 V1.1.1, section 6.1.2)
     if (m_mib.itsGnIfType == InterfaceType::ITS_G5) {
@@ -1009,7 +1028,7 @@ bool Router::process_extended(const ExtendedPduConstRefs<BeaconHeader>& pdu, con
     source_entry.update_pdr(packet_size, m_mib.itsGnMaxPacketDataRateEmaBeta);
 
     // step 6: set SO LocTE to neighbour
-    source_entry.set_neighbour(true);
+    source_entry.set_neighbour(true, m_mib.vanetzaNeighbourFlagExpiry);
 
     // step 7: never pass up Beacons
     return false;
@@ -1048,7 +1067,10 @@ bool Router::process_extended(const ExtendedPduConstRefs<GeoBroadcastHeader>& pd
     }
 
     // step 4: execute DAD
-    detect_duplicate_address(source_addr, ll.sender);
+    if (m_mib.vanetzaMultiHopDuplicateAddressDetection) {
+        // Be careful, DAD is broken with address mode AUTO for multi-hop communication
+        detect_duplicate_address(source_addr, ll.sender);
+    }
 
     // step 5 & step 6 (make sure IS_NEIGHBOUR is false for new location table entry)
     const std::size_t packet_size = size(packet, OsiLayer::Network, OsiLayer::Application);
@@ -1068,16 +1090,16 @@ bool Router::process_extended(const ExtendedPduConstRefs<GeoBroadcastHeader>& pd
     // step 9: discard packet (no forwarding) if hop limit is reached
     if (pdu.basic().hop_limit <= 1) {
         forwarding_stopped(ForwardingStopReason::Hop_Limit);
-        return within_destination; // discard packet (step 9a)
+        return decide_pass_up(within_destination, gbc); // discard packet (step 9a)
     } else if (m_mib.itsGnMaxPacketDataRate < std::numeric_limits<decltype(m_mib.itsGnMaxPacketDataRate)>::max()) {
         // do packet data rate checks (annex B.2) if set maximum rate is not "infinity" (i.e. max unsigned value)
         if (source_entry.get_pdr() > m_mib.itsGnMaxPacketDataRate * 1000.0) {
             forwarding_stopped(ForwardingStopReason::Source_PDR);
-            return within_destination; // omit forwarding, source exceeds PDR limit
+            return decide_pass_up(within_destination, gbc); // omit forwarding, source exceeds PDR limit
         } else if (const auto* sender_entry = m_location_table.get_entry(ll.sender)) {
             if (sender_entry->get_pdr() > m_mib.itsGnMaxPacketDataRate * 1000.0) {
                 forwarding_stopped(ForwardingStopReason::Sender_PDR);
-                return within_destination; // omit forwarding, sender exceeds PDR limit
+                return decide_pass_up(within_destination, gbc); // omit forwarding, sender exceeds PDR limit
             }
         }
     }
@@ -1129,8 +1151,21 @@ bool Router::process_extended(const ExtendedPduConstRefs<GeoBroadcastHeader>& pd
         fwd_packet.process();
     }
 
-    // return pass up decision (step 7)
-    return within_destination;
+    // step 7: pass up decision
+    return decide_pass_up(within_destination, gbc);
+}
+
+bool Router::decide_pass_up(bool within_destination, const GeoBroadcastHeader& gbc)
+{
+    if (m_mib.vanetzaGbcMemoryCapacity == 0) {
+        // classic pass up: suppress only GBCs outside of destination area
+        return within_destination;
+    } else if (within_destination) {
+        // modified pass up: suppress passing up duplicate GBC packets
+        return !m_gbc_memory.remember(std::make_tuple(gbc.source_position.gn_addr, gbc.sequence_number));
+    } else {
+        return false;
+    }
 }
 
 void Router::flush_broadcast_forwarding_buffer()
@@ -1179,7 +1214,9 @@ bool Router::detect_duplicate_packet(const Address& addr_so, SequenceNumber sn)
 std::unique_ptr<ShbPdu> Router::create_shb_pdu(const ShbDataRequest& request)
 {
     std::unique_ptr<ShbPdu> pdu { new ShbPdu(request, m_mib) };
+    pdu->basic().hop_limit = 1;
     pdu->common().header_type = HeaderType::TSB_Single_Hop;
+    pdu->common().maximum_hop_limit = 1;
     pdu->extended().source_position = m_local_position_vector;
     pdu->extended().dcc = m_dcc_field_generator->generate_dcc_field();
     return pdu;

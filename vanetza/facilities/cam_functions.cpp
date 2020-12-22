@@ -1,6 +1,3 @@
-#ifndef CAM_FUNCTIONS_CPP_JQXFKSJP
-#define CAM_FUNCTIONS_CPP_JQXFKSJP
-
 #include <vanetza/asn1/cam.hpp>
 #include <vanetza/facilities/cam_functions.hpp>
 #include <vanetza/facilities/path_history.hpp>
@@ -22,12 +19,14 @@ namespace facilities
 
 using vanetza::units::Angle;
 
+static const auto microdegree = units::degree * units::si::micro;
+
 // TODO:  C2C-CC BSP allows up to 500m history for CAMs, we provide just minimal required history
 void copy(const facilities::PathHistory& ph, BasicVehicleContainerLowFrequency& container)
 {
     static const std::size_t scMaxPathPoints = 23;
     static const boost::posix_time::time_duration scMaxDeltaTime = boost::posix_time::millisec(655350);
-    static const auto scMicrodegree = units::si::micro * units::degree;
+    static const auto scMicrodegree = microdegree;
 
     const auto& concise_points = ph.getConcisePoints();
     const facilities::PathPoint& ref = ph.getReferencePoint();
@@ -97,18 +96,16 @@ units::Length distance(const ReferencePosition_t& a, const ReferencePosition_t& 
 {
     using geonet::GeodeticPosition;
     using units::GeoAngle;
-    using boost::units::si::micro;
-    using boost::units::degree::degree;
 
     auto length = units::Length::from_value(std::numeric_limits<double>::quiet_NaN());
     if (is_available(a) && is_available(b)) {
         GeodeticPosition geo_a {
-            GeoAngle { a.latitude / Latitude_oneMicrodegreeNorth * micro * degree },
-            GeoAngle { a.longitude / Longitude_oneMicrodegreeEast * micro * degree }
+            GeoAngle { a.latitude / Latitude_oneMicrodegreeNorth * microdegree },
+            GeoAngle { a.longitude / Longitude_oneMicrodegreeEast * microdegree }
         };
         GeodeticPosition geo_b {
-            GeoAngle { b.latitude / Latitude_oneMicrodegreeNorth * micro * degree },
-            GeoAngle { b.longitude / Longitude_oneMicrodegreeEast * micro * degree }
+            GeoAngle { b.latitude / Latitude_oneMicrodegreeNorth * microdegree },
+            GeoAngle { b.longitude / Longitude_oneMicrodegreeEast * microdegree }
         };
         length = geonet::distance(geo_a, geo_b);
     }
@@ -119,14 +116,12 @@ units::Length distance(const ReferencePosition_t& a, units::GeoAngle lat, units:
 {
     using geonet::GeodeticPosition;
     using units::GeoAngle;
-    using boost::units::si::micro;
-    using boost::units::degree::degree;
 
     auto length = units::Length::from_value(std::numeric_limits<double>::quiet_NaN());
     if (is_available(a)) {
         GeodeticPosition geo_a {
-            GeoAngle { a.latitude / Latitude_oneMicrodegreeNorth * micro * degree },
-            GeoAngle { a.longitude / Longitude_oneMicrodegreeEast * micro * degree }
+            GeoAngle { a.latitude / Latitude_oneMicrodegreeNorth * microdegree },
+            GeoAngle { a.longitude / Longitude_oneMicrodegreeEast * microdegree }
         };
         GeodeticPosition geo_b { lat, lon };
         length = geonet::distance(geo_a, geo_b);
@@ -142,6 +137,29 @@ bool is_available(const Heading& hd)
 bool is_available(const ReferencePosition& pos)
 {
     return pos.latitude != Latitude_unavailable && pos.longitude != Longitude_unavailable;
+}
+
+
+template<typename T, typename U>
+long round(const boost::units::quantity<T>& q, const U& u)
+{
+    boost::units::quantity<U> v { q };
+    return std::round(v.value());
+}
+
+void copy(const PositionFix& position, ReferencePosition& reference_position) {
+    reference_position.longitude = round(position.longitude, microdegree) * Longitude_oneMicrodegreeEast;
+    reference_position.latitude = round(position.latitude, microdegree) * Latitude_oneMicrodegreeNorth;
+    reference_position.positionConfidenceEllipse.semiMajorOrientation = HeadingValue_unavailable;
+    reference_position.positionConfidenceEllipse.semiMajorConfidence = SemiAxisLength_unavailable;
+    reference_position.positionConfidenceEllipse.semiMinorConfidence = SemiAxisLength_unavailable;
+    if (position.altitude) {
+        reference_position.altitude.altitudeValue = to_altitude_value(position.altitude->value());
+        reference_position.altitude.altitudeConfidence = to_altitude_confidence(position.altitude->confidence());
+    } else {
+        reference_position.altitude.altitudeValue = AltitudeValue_unavailable;
+        reference_position.altitude.altitudeConfidence = AltitudeConfidence_unavailable;
+    }
 }
 
 AltitudeConfidence_t to_altitude_confidence(units::Length confidence)
@@ -282,7 +300,74 @@ bool check_service_specific_permissions(const asn1::Cam& cam, security::CamPermi
     return ssp.has(required_permissions);
 }
 
+void print_indented(std::ostream& os, const asn1::Cam& message, const std::string& indent, unsigned level)
+{
+    auto prefix = [&](const char* field) -> std::ostream& {
+        for (unsigned i = 0; i < level; ++i) {
+            os << indent;
+        }
+        os << field << ": ";
+        return os;
+    };
+
+    const ItsPduHeader_t& header = message->header;
+    prefix("ITS PDU Header") << "\n";
+    ++level;
+    prefix("Protocol Version") << header.protocolVersion << "\n";
+    prefix("Message ID") << header.messageID << "\n";
+    prefix("Station ID") << header.stationID << "\n";
+    --level;
+
+    const CoopAwareness_t& cam = message->cam;
+    prefix("CoopAwarensess") << "\n";
+    ++level;
+    prefix("Generation Delta Time") << cam.generationDeltaTime << "\n";
+
+    prefix("Basic Container") << "\n";
+    ++level;
+    const BasicContainer_t& basic = cam.camParameters.basicContainer;
+    prefix("Station Type") << basic.stationType << "\n";
+    prefix("Reference Position") << "\n";
+    ++level;
+    prefix("Longitude") << basic.referencePosition.longitude << "\n";
+    prefix("Latitude") << basic.referencePosition.latitude << "\n";
+    prefix("Semi Major Orientation") << basic.referencePosition.positionConfidenceEllipse.semiMajorOrientation << "\n";
+    prefix("Semi Major Confidence") << basic.referencePosition.positionConfidenceEllipse.semiMajorConfidence << "\n";
+    prefix("Semi Minor Confidence") << basic.referencePosition.positionConfidenceEllipse.semiMinorConfidence << "\n";
+    prefix("Altitude [Confidence]") << basic.referencePosition.altitude.altitudeValue
+        << " [" << basic.referencePosition.altitude.altitudeConfidence << "]\n";
+    --level;
+    --level;
+
+    if (cam.camParameters.highFrequencyContainer.present == HighFrequencyContainer_PR_basicVehicleContainerHighFrequency) {
+        prefix("High Frequency Container [Basic Vehicle]") << "\n";
+        ++level;
+        const BasicVehicleContainerHighFrequency& bvc =
+            cam.camParameters.highFrequencyContainer.choice.basicVehicleContainerHighFrequency;
+        prefix("Heading [Confidence]") << bvc.heading.headingValue
+            << " [" << bvc.heading.headingConfidence << "]\n";
+        prefix("Speed [Confidence]") << bvc.speed.speedValue
+            << " [" << bvc.speed.speedConfidence << "]\n";
+        prefix("Drive Direction") << bvc.driveDirection << "\n";
+        prefix("Longitudinal Acceleration") << bvc.longitudinalAcceleration.longitudinalAccelerationValue << "\n";
+        prefix("Vehicle Length [Confidence Indication]") << bvc.vehicleLength.vehicleLengthValue
+            << " [" << bvc.vehicleLength.vehicleLengthConfidenceIndication << "]\n";
+        prefix("Vehicle Width") << bvc.vehicleWidth << "\n";
+        prefix("Curvature [Confidence]") << bvc.curvature.curvatureValue
+            << " [" << bvc.curvature.curvatureConfidence << "]\n";
+        prefix("Curvature Calculation Mode") << bvc.curvatureCalculationMode << "\n";
+        prefix("Yaw Rate [Confidence]") << bvc.yawRate.yawRateValue
+            << " [" << bvc.yawRate.yawRateConfidence << "]\n";
+        --level;
+    } else {
+        prefix("High Frequency Container") << cam.camParameters.highFrequencyContainer.present << "\n";
+    }
+
+    prefix("Low Frequency Container") << (cam.camParameters.lowFrequencyContainer ? "yes" : "no") << "\n";
+    // TODO: print basic vehicle low frequency container in detail
+    // TODO: print special vehicle container
+    --level;
+}
+
 } // namespace facilities
 } // namespace vanetza
-
-#endif /* CAM_FUNCTIONS_CPP_JQXFKSJP */

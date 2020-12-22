@@ -39,8 +39,10 @@ public:
         RequestInterface(NetworkTopology&, const MacAddress&);
         void request(const dcc::DataRequest&, std::unique_ptr<ChunkPacket>) override;
         void reset();
+        void transmit();
 
-        unsigned counter = 0;
+        unsigned requests = 0;
+        unsigned transmissions = 0;
         dcc::DataRequest last_request;
         std::unique_ptr<ChunkPacket> last_packet;
 
@@ -87,18 +89,23 @@ public:
     void add_reachability(const MacAddress&, std::initializer_list<MacAddress>);
     void save_request(const dcc::DataRequest&, std::unique_ptr<ChunkPacket>);
     void dispatch();
-    void send(Router&, const MacAddress&, const MacAddress&);
-    void repeat(const MacAddress&, const MacAddress&);
+    void send(Router&, const MacAddress&, const MacAddress&, const ChunkPacket&);
     void set_position(const MacAddress&, CartesianPosition);
-    void advance_time(Clock::duration);
+    void advance_time(Clock::duration t);
     void reset_counters();
     void set_duplication_mode(PacketDuplicationMode);
+    void set_network_delay(Clock::duration delay);
+    void build_fully_meshed_reachability();
 
 private:
+    Clock::time_point next_event() const;
+    using PendingTransmission = std::tuple<Clock::time_point, dcc::DataRequest, std::unique_ptr<ChunkPacket>>;
+
     std::unordered_map<MacAddress, unsigned> counter_requests;
     std::unordered_map<MacAddress, std::unique_ptr<RouterContext>> hosts;
     std::unordered_map<MacAddress, std::set<MacAddress>> reachability;
-    std::list<std::tuple<dcc::DataRequest, std::unique_ptr<ChunkPacket>>> requests;
+    std::list<PendingTransmission> requests;
+    Clock::duration network_delay = Clock::duration::zero();
     Clock::time_point now;
     ManagementInformationBase mib;
     unsigned counter_indications;

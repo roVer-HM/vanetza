@@ -10,25 +10,33 @@
 #include <functional>
 #include <iostream>
 
-// This is rather simple application that sends CAMs in a regular interval.
+// This is a very simple CA application sending CAMs at a fixed rate.
 
 using namespace vanetza;
 using namespace vanetza::facilities;
 using namespace std::chrono;
 
-auto microdegree = vanetza::units::degree * boost::units::si::micro;
-
-template<typename T, typename U>
-long round(const boost::units::quantity<T>& q, const U& u)
-{
-	boost::units::quantity<U> v { q };
-	return std::round(v.value());
-}
-
-CamApplication::CamApplication(PositionProvider& positioning, const Runtime& rt, boost::asio::steady_timer& timer, milliseconds cam_interval)
-    : positioning_(positioning), runtime_(rt), cam_interval_(cam_interval), timer_(timer)
+CamApplication::CamApplication(PositionProvider& positioning, Runtime& rt) :
+    positioning_(positioning), runtime_(rt), cam_interval_(seconds(1))
 {
     schedule_timer();
+}
+
+void CamApplication::set_interval(Clock::duration interval)
+{
+    cam_interval_ = interval;
+    runtime_.cancel(this);
+    schedule_timer();
+}
+
+void CamApplication::print_generated_message(bool flag)
+{
+    print_tx_msg_ = flag;
+}
+
+void CamApplication::print_received_message(bool flag)
+{
+    print_rx_msg_ = flag;
 }
 
 CamApplication::PortType CamApplication::port()
@@ -41,21 +49,21 @@ void CamApplication::indicate(const DataIndication& indication, UpPacketPtr pack
     asn1::PacketVisitor<asn1::Cam> visitor;
     std::shared_ptr<const asn1::Cam> cam = boost::apply_visitor(visitor, *packet);
 
-    std::cout << "CAM application received a packet with " << (cam ? "decodable" : "broken") << "content" << std::endl;
+    std::cout << "CAM application received a packet with " << (cam ? "decodable" : "broken") << " content" << std::endl;
+    if (cam && print_rx_msg_) {
+        std::cout << "Received CAM contains\n";
+        print_indented(std::cout, *cam, "  ", 1);
+    }
 }
 
 void CamApplication::schedule_timer()
 {
-    timer_.expires_from_now(cam_interval_);
-    timer_.async_wait(std::bind(&CamApplication::on_timer, this, std::placeholders::_1));
+    runtime_.schedule(cam_interval_, std::bind(&CamApplication::on_timer, this, std::placeholders::_1), this);
 }
 
-void CamApplication::on_timer(const boost::system::error_code& ec)
+void CamApplication::on_timer(Clock::time_point)
 {
-    if (ec == boost::asio::error::operation_aborted) {
-        return;
-    }
-
+    schedule_timer();
     vanetza::asn1::Cam message;
 
     ItsPduHeader_t& header = message->header;
@@ -72,27 +80,13 @@ void CamApplication::on_timer(const boost::system::error_code& ec)
     auto position = positioning_.position_fix();
 
     if (!position.confidence) {
-        schedule_timer();
-
         std::cerr << "Skipping CAM, because no good position is available, yet." << std::endl;
-
         return;
     }
 
     BasicContainer_t& basic = cam.camParameters.basicContainer;
     basic.stationType = StationType_passengerCar;
-    basic.referencePosition.longitude = round(position.longitude, microdegree) * Longitude_oneMicrodegreeEast;
-    basic.referencePosition.latitude = round(position.latitude, microdegree) * Latitude_oneMicrodegreeNorth;
-    basic.referencePosition.positionConfidenceEllipse.semiMajorOrientation = HeadingValue_unavailable;
-    basic.referencePosition.positionConfidenceEllipse.semiMajorConfidence = SemiAxisLength_unavailable;
-    basic.referencePosition.positionConfidenceEllipse.semiMinorConfidence = SemiAxisLength_unavailable;
-    if (position.altitude) {
-        basic.referencePosition.altitude.altitudeValue = to_altitude_value(position.altitude->value());
-        basic.referencePosition.altitude.altitudeConfidence = to_altitude_confidence(position.altitude->confidence());
-    } else {
-        basic.referencePosition.altitude.altitudeValue = AltitudeValue_unavailable;
-        basic.referencePosition.altitude.altitudeConfidence = AltitudeConfidence_unavailable;
-    }
+    copy(position, basic.referencePosition);
 
     cam.camParameters.highFrequencyContainer.present = HighFrequencyContainer_PR_basicVehicleContainerHighFrequency;
 
@@ -121,6 +115,11 @@ void CamApplication::on_timer(const boost::system::error_code& ec)
         throw std::runtime_error("Invalid high frequency CAM: %s" + error);
     }
 
+    if (print_tx_msg_) {
+        std::cout << "Generated CAM contains\n";
+        print_indented(std::cout, message, "  ", 1);
+    }
+
     DownPacketPtr packet { new DownPacket() };
     packet->layer(OsiLayer::Application) = std::move(message);
 
@@ -133,6 +132,4 @@ void CamApplication::on_timer(const boost::system::error_code& ec)
     if (!confirm.accepted()) {
         throw std::runtime_error("CAM application data request failed");
     }
-
-    schedule_timer();
 }

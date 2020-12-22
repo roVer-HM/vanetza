@@ -47,18 +47,27 @@ NetworkTopology::RequestInterface::RequestInterface(NetworkTopology& network, co
 
 void NetworkTopology::RequestInterface::request(const dcc::DataRequest& req, std::unique_ptr<ChunkPacket> packet)
 {
-    ++counter;
+    ++requests;
     last_request = req;
-    last_packet.reset(new ChunkPacket(*packet));
     last_request.source = address;
-    network.save_request(last_request, std::move(packet));
+    last_packet = std::move(packet);
+    transmit();
 }
 
 void NetworkTopology::RequestInterface::reset()
 {
-    counter = 0;
+    requests = 0;
+    transmissions = 0;
     last_request = dcc::DataRequest {};
     last_packet.reset();
+}
+
+void NetworkTopology::RequestInterface::transmit()
+{
+    if (last_packet) {
+        ++transmissions;
+        network.save_request(last_request, std::unique_ptr<ChunkPacket> { new ChunkPacket(*last_packet) });
+    }
 }
 
 void NetworkTopology::TransportHandler::indicate(const DataIndication& ind, std::unique_ptr<UpPacket> packet)
@@ -171,7 +180,7 @@ void NetworkTopology::add_reachability(const MacAddress& addr, std::initializer_
 void NetworkTopology::save_request(const dcc::DataRequest& req, std::unique_ptr<ChunkPacket> packet)
 {
     // save request with packet in list requests
-    requests.emplace_back(req, std::move(packet));
+    requests.emplace_back(now + network_delay, req, std::move(packet));
 
     // increment request counter
     counter_requests[req.source]++;
@@ -182,10 +191,19 @@ void NetworkTopology::dispatch()
     // process a stable sequence of saved requests
     decltype(requests) current_requests;
     std::swap(current_requests, requests);
+    decltype(requests) skipped_requests;
+
     for (auto& tuple: current_requests) {
+        // postpone transmission if its time has not yet come
+        auto& timepoint = std::get<0>(tuple);
+        if (timepoint > now) {
+            skipped_requests.emplace_back(std::move(tuple));
+            continue;
+        }
+
         // extract request and packet from tuple
-        auto req = std::get<0>(tuple);
-        get_interface(req.source)->last_packet.reset(new ChunkPacket(*std::get<1>(tuple)));
+        auto& req = std::get<1>(tuple);
+        auto& packet = std::get<2>(tuple);
 
         auto neighbours = reachability[req.source];
         // broadcast packet to all reachable routers
@@ -193,7 +211,7 @@ void NetworkTopology::dispatch()
             for (auto& mac: neighbours) {
                 auto router = get_router(mac);
                 if (router) {
-                    send(*router, req.source, req.destination);
+                    send(*router, req.source, req.destination, *packet);
                 }
             }
         }
@@ -201,27 +219,21 @@ void NetworkTopology::dispatch()
         else if (neighbours.find(req.destination) != neighbours.end()) {
             auto router = get_router(req.destination);
             if (router) {
-                send(*router, req.source, req.destination);
+                send(*router, req.source, req.destination, *packet);
             }
         }
     }
+
+    // move all skipped requests to head of pending requests
+    requests.splice(requests.begin(), std::move(skipped_requests));
 }
 
-void NetworkTopology::send(Router& receiver, const MacAddress& sender, const MacAddress& destination)
+void NetworkTopology::send(Router& receiver, const MacAddress& sender, const MacAddress& destination, const ChunkPacket& packet)
 {
     assert(sender != destination);
     counter_indications++;
-    std::unique_ptr<UpPacket> packet_up = fn_duplicate(*get_interface(sender)->last_packet);
+    std::unique_ptr<UpPacket> packet_up = fn_duplicate(packet);
     receiver.indicate(std::move(packet_up), sender, destination);
-}
-
-void NetworkTopology::repeat(const MacAddress& sender, const MacAddress& destination)
-{
-    assert(destination != cBroadcastMacAddress);
-    auto receiver = get_router(destination);
-    if (receiver) {
-        send(*receiver, sender, destination);
-    }
 }
 
 void NetworkTopology::set_position(const MacAddress& addr, CartesianPosition c)
@@ -240,9 +252,9 @@ void NetworkTopology::set_position(const MacAddress& addr, CartesianPosition c)
 
 void NetworkTopology::advance_time(Clock::duration t)
 {
-    const Clock::duration max_step = std::chrono::milliseconds(500);
     do {
-        const auto step = std::min(t, max_step);
+        auto next = next_event();
+        const auto step = std::min(t, next - now);
         now += step;
         t -= step;
         // update timestamp for every router
@@ -254,6 +266,21 @@ void NetworkTopology::advance_time(Clock::duration t)
         }
         dispatch();
     } while (t.count() > 0);
+}
+
+Clock::time_point NetworkTopology::next_event() const
+{
+    // next event may be pending link layer request
+    Clock::time_point next = requests.empty() ? Clock::time_point::max() : std::get<0>(requests.front());
+
+    for (auto& kv : hosts) {
+        RouterContext& host = *kv.second;
+        if (host.runtime.next() > now && host.runtime.next() < next) {
+            next = host.runtime.next();
+        }
+    }
+
+    return next;
 }
 
 void NetworkTopology::reset_counters()
@@ -281,6 +308,23 @@ void NetworkTopology::set_duplication_mode(PacketDuplicationMode mode)
         default:
             throw std::runtime_error("Invalid PacketDuplicationMode");
             break;
+    }
+}
+
+void NetworkTopology::set_network_delay(Clock::duration delay)
+{
+    network_delay = delay;
+}
+
+void NetworkTopology::build_fully_meshed_reachability()
+{
+    reachability.clear();
+    for (auto& outer : hosts) {
+        for (auto& inner : hosts) {
+            if (outer != inner) {
+                reachability[outer.first].insert(inner.first);
+            }
+        }
     }
 }
 

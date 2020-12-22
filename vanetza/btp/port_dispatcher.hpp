@@ -51,9 +51,15 @@ public:
     /**
      * Add a hook listening for all incoming BTP packets
      * \param hook A hook implementing the promiscuous hook interface
-     * \note Multiple hooks can be registered at a dispatcher at the same time
+     * \note Each registered hook is invoked only once per indication
      */
-    void add_promiscuous_hook(PromiscuousHook*);
+    void add_promiscuous_hook(PromiscuousHook* hook);
+
+    /**
+     * Remove promiscuous hook
+     * \param hook pointer to previously added hook
+     */
+    void remove_promiscuous_hook(PromiscuousHook*);
 
     // Implementation of geonet::TransportInterface
     void indicate(const geonet::DataIndication&, std::unique_ptr<UpPacket>) override;

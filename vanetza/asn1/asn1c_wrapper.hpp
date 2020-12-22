@@ -57,7 +57,11 @@ public:
     // move semantics
     asn1c_wrapper_common(asn1c_wrapper_common&& other) noexcept :
         m_struct(nullptr), m_type(other.m_type) { swap(other); }
-    asn1c_wrapper_common& operator=(asn1c_wrapper_common&& other) noexcept { swap(other); }
+    asn1c_wrapper_common& operator=(asn1c_wrapper_common&& other) noexcept
+    {
+        swap(other);
+        return *this;
+    }
 
     // dereferencing
     asn1c_type& operator*() { return *m_struct; }
@@ -138,6 +142,11 @@ public:
         return vanetza::asn1::decode_per(base::m_type, (void**)&(base::m_struct), &(*begin), std::distance(begin, end));
     }
 
+    bool decode(const void* buffer, std::size_t len)
+    {
+        return vanetza::asn1::decode_per(base::m_type, (void**)&(base::m_struct), buffer, len);
+    }
+
     /**
      * Get size of encoded ASN.1 struct
      * \return size in bytes
@@ -182,6 +191,11 @@ public:
     bool decode(ByteBuffer::const_iterator begin, ByteBuffer::const_iterator end)
     {
         return vanetza::asn1::decode_oer(base::m_type, (void**)&(base::m_struct), &(*begin), std::distance(begin, end));
+    }
+
+    bool decode(const void* buffer, std::size_t len)
+    {
+        return vanetza::asn1::decode_oer(base::m_type, (void**)&(base::m_struct), buffer, len);
     }
 
     /**

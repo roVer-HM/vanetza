@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstring>
 #include <system_error>
+#include <linux/if_ether.h>
 #include <linux/if_packet.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
@@ -32,6 +33,7 @@ EthernetDevice::protocol::endpoint EthernetDevice::endpoint(int family) const
 {
     sockaddr_ll socket_address = {0};
     socket_address.sll_family = family;
+    socket_address.sll_protocol = htons(ETH_P_ALL);
     socket_address.sll_ifindex = index();
     return protocol::endpoint(&socket_address, sizeof(sockaddr_ll));
 }

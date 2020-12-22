@@ -1,6 +1,7 @@
 #include "port_dispatcher.hpp"
 #include "data_indication.hpp"
 #include <vanetza/geonet/data_indication.hpp>
+#include <algorithm>
 #include <cassert>
 
 namespace vanetza
@@ -34,8 +35,16 @@ boost::optional<DataIndication> parse_btp_header(const geonet::DataIndication& g
 void PortDispatcher::add_promiscuous_hook(PromiscuousHook* hook)
 {
     if (hook != nullptr) {
-        m_promiscuous_hooks.push_back(hook);
+        auto it = std::find(m_promiscuous_hooks.begin(), m_promiscuous_hooks.end(), hook);
+        if (it == m_promiscuous_hooks.end()) {
+            m_promiscuous_hooks.push_back(hook);
+        }
     }
+}
+
+void PortDispatcher::remove_promiscuous_hook(PromiscuousHook* hook)
+{
+    m_promiscuous_hooks.remove(hook);
 }
 
 void PortDispatcher::set_interactive_handler(

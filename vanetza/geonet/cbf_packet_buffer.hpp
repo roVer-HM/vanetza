@@ -2,10 +2,10 @@
 #define CBF_PACKET_BUFFER_HPP_MU3RK5V1
 
 #include <vanetza/common/clock.hpp>
+#include <vanetza/geonet/cbf_packet_identifier.hpp>
 #include <vanetza/geonet/packet.hpp>
 #include <vanetza/geonet/pending_packet.hpp>
 #include <vanetza/geonet/pdu_variant.hpp>
-#include <vanetza/geonet/sequence_number.hpp>
 #include <boost/bimap/bimap.hpp>
 #include <boost/bimap/multiset_of.hpp>
 #include <boost/bimap/unordered_set_of.hpp>
@@ -13,7 +13,6 @@
 #include <cstddef>
 #include <list>
 #include <memory>
-#include <tuple>
 
 // forward declarations
 namespace vanetza
@@ -23,35 +22,13 @@ class Runtime;
 namespace geonet
 {
 class Address;
+class CbfCounter;
 class CbfPacket;
 class Lifetime;
 
-using CbfPacketIdentifier = std::tuple<Address, SequenceNumber>;
-CbfPacketIdentifier identifier(const CbfPacket&);
-CbfPacketIdentifier identifier(const Address&, SequenceNumber);
-
-} // namespace geonet
-} // namespace vanetza
-
-
-namespace std
-{
-/// std::hash specialization for CbfPacketIdentifier
-template<> struct hash<vanetza::geonet::CbfPacketIdentifier>
-{
-    size_t operator()(const vanetza::geonet::CbfPacketIdentifier&) const;
-};
-} // namespace std
-
-
-namespace vanetza
-{
-namespace geonet
-{
-
 /**
  * CbfPacket enables handling of conventional packets in a CBF packet buffer.
- * It contains a GeoBroadcast PDU, Payload and an additional counter.
+ * It contains a GeoBroadcast PDU and the network layer payload.
  */
 class CbfPacket
 {
@@ -81,18 +58,6 @@ public:
     SequenceNumber sequence_number() const;
 
     /**
-     * Get counter of buffered packet
-     * \return reference to counter (initially 1)
-     */
-    unsigned& counter() { return m_counter; }
-
-    /**
-     * Get counter of buffered packet
-     * \return copy of counter
-     */
-    unsigned counter() const { return m_counter; }
-
-    /**
      * Reduce lifetime of buffered packet
      * \param d reduce lifetime by this duration
      * \return remaining lifetime
@@ -110,7 +75,6 @@ public:
 private:
     PendingPacket<GbcPdu> m_packet;
     const MacAddress m_sender;
-    unsigned m_counter;
 };
 
 
@@ -121,54 +85,66 @@ class CbfPacketBuffer
 {
 public:
     using TimerCallback = std::function<void(PendingPacket<GbcPdu>&&)>;
+    using Identifier = CbfPacketIdentifier;
 
     /**
      * Create CBF packet buffer with bounded capacity
      * \param rt Runtime instance used for internal timers
-     * \param timer_cb Callback invoked for each packet on expiry
+     * \param cb Callback invoked for each packet on expiry
+     * \param cnt CBF counter implementation
      * \param bytes Buffer can hold at most this number of bytes
      */
-    CbfPacketBuffer(Runtime& rt, TimerCallback timer_cb, std::size_t bytes);
+    CbfPacketBuffer(Runtime& rt, TimerCallback cb, std::unique_ptr<CbfCounter> cnt, std::size_t bytes);
     ~CbfPacketBuffer();
-
-    /**
-     * Try to drop a packet from buffer identified by source address and sequence number.
-     * \param src source address
-     * \param sn sequence number
-     * \return true if packet was dropped
-     */
-    bool try_drop(const Address& source, SequenceNumber sn);
 
     /**
      * Enqueue a packet and start an associated timer expiring after timeout
      * \param packet Buffer this packet
      * \param timeout CBF timer expiration for this packet
      */
-    void enqueue(CbfPacket&& packet, Clock::duration timeout);
+    void add(CbfPacket&& packet, Clock::duration timeout);
+
+    /**
+     * Try to remove a packet from buffer.
+     * \param id packet identification
+     * \return true if packet existed before removal
+     */
+    bool remove(const Identifier& id);
+
+    /**
+     * Update associated packet timer
+     * \param id packet identification
+     * \param timeout CBF timer expiration
+     */
+    void update(const Identifier& id, Clock::duration timeout);
 
     /**
      * Fetch a packet from buffer.
      *
      * Associated timer is automatically stopped and packet removed from buffer.
-     * Enqueue packet again if it shall not be dropped.
      * Packet lifetime is reduced by queueing time at return.
      *
-     * \param source source address
-     * \param sn sequence number
-     * \return packet matching source address and sequence number
+     * \param id packet identification
+     * \return packet if found in buffer
      */
-    boost::optional<CbfPacket> fetch(const Address& source, SequenceNumber sn);
+    boost::optional<CbfPacket> fetch(const Identifier& id);
 
     /**
      * Find packet in buffer.
-     * \param source source address
-     * \param sn sequence number
+     * \param id packet identification
      * \return read-only pointer to packet, nullptr if not found
      */
-    const CbfPacket* find(const Address& source, SequenceNumber sn) const;
+    const CbfPacket* find(const Identifier& id) const;
+
+    /**
+     * Get counter associated with given packet
+     * \note packet counter is incremented at each timer update
+     * \param id packet identification
+     * \return 0 if packet has never been buffered before
+     */
+    std::size_t counter(const Identifier& packet) const;
 
 private:
-    using Identifier = CbfPacketIdentifier;
 
     struct Timer
     {
@@ -193,6 +169,11 @@ private:
     void flush();
 
     /**
+     * Remove timer from map and reschedule timer event if necessary
+     */
+    void remove_timer(typename timer_bimap::left_map::iterator);
+
+    /**
      * Schedule next timer event at runtime
      */
     void schedule_timer();
@@ -208,6 +189,7 @@ private:
     std::list<CbfPacket> m_packets;
     timer_bimap m_timers;
     Runtime& m_runtime;
+    std::unique_ptr<CbfCounter> m_counter;
     const std::size_t m_capacity_bytes;
     std::size_t m_stored_bytes;
     TimerCallback m_timer_callback;

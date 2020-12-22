@@ -4,6 +4,8 @@ set(CXX_SOURCES
     basic_header.cpp
     beacon_header.cpp
     cbf_packet_buffer.cpp
+    cbf_counter.cpp
+    cbf_packet_identifier.cpp
     cbr_aggregator.cpp
     common_header.cpp
     data_confirm.cpp
@@ -14,6 +16,7 @@ set(CXX_SOURCES
     duplicate_packet_list.cpp
     gbc_gac_header.cpp
     gbc_header.cpp
+    gbc_memory.cpp
     header_type.cpp
     header_variant.cpp
     indication_context.cpp
