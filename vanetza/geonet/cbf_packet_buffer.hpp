@@ -36,8 +36,8 @@ public:
     CbfPacket(PendingPacket<GbcPdu>&&, const MacAddress& sender);
     CbfPacket(PendingPacket<GbcPdu, const MacAddress&>&&, const MacAddress& sender);
 
-    CbfPacket(CbfPacket&&) = default;
-    CbfPacket& operator=(CbfPacket&&) = default;
+    // CbfPacket(CbfPacket&&) = default;
+    // CbfPacket& operator=(CbfPacket&&) = default;
 
     /**
      * Get sender of buffered packet

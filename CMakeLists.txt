@@ -50,13 +50,16 @@ include(UseVanetza)
 # Enable usage of targets' folder property (good for Visual Studio)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
-# Mandatory and optional project dependencies
-set(Boost_COMPONENTS date_time)
-set(Boost_OPTIONAL_COMPONENTS system program_options)
+# Find project dependencies
+set(Boost_COMPONENTS date_time) # used by VanetzaConfig generator
 find_package(Boost 1.58 REQUIRED COMPONENTS ${Boost_COMPONENTS})
-include(CompatBoostTargets)
-# optional components need to be queried seperately (FindBoost bails out when one is missing)
-find_package(Boost 1.58 QUIET OPTIONAL_COMPONENTS ${Boost_OPTIONAL_COMPONENTS})
+# query optional Boost components one by one quietly
+foreach(component IN ITEMS program_options system)
+  find_package(Boost 1.58 QUIET COMPONENTS ${component})
+  if (Boost_${component}_FOUND)
+    list(APPEND Boost_COMPONENTS ${component})
+  endif()
+endforeach()
 include(CompatBoostTargets)
 find_package(CryptoPP 5.6.1 REQUIRED)
 find_package(GeographicLib 1.37 REQUIRED)

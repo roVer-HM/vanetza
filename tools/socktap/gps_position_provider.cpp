@@ -5,7 +5,7 @@
 #include <vanetza/units/length.hpp>
 #include <cmath>
 
-static_assert(GPSD_API_MAJOR_VERSION >= 5 && GPSD_API_MAJOR_VERSION <= 10, "libgps has incompatible API");
+static_assert(GPSD_API_MAJOR_VERSION >= 5 && GPSD_API_MAJOR_VERSION <= 11, "libgps has incompatible API");
 
 namespace
 {
@@ -114,7 +114,7 @@ void GpsPositionProvider::fetch_position_fix()
         throw GpsPositioningException(errno);
     }
 
-    if (gpsd_status(gps_data) == STATUS_FIX && gps_data.fix.mode >= MODE_2D) {
+    if (gpsd_status(gps_data) >= STATUS_FIX && gps_data.fix.mode >= MODE_2D) {
         using namespace vanetza::units;
         static const TrueNorth north = TrueNorth::from_value(0.0);
 
