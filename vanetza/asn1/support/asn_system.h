@@ -27,12 +27,15 @@
 #include <limits.h>	/* For LONG_MAX */
 #include <stdarg.h>	/* For va_start */
 #include <stddef.h>	/* for offsetof and ptrdiff_t */
+#include <inttypes.h>	/* for PRIdMAX */
 
 #ifdef	_WIN32
 
 #include <malloc.h>
+#ifndef __MINGW32__
 #define	 snprintf	_snprintf
 #define	 vsnprintf	_vsnprintf
+#endif
 
 /* To avoid linking with ws2_32.lib, here's the definition of ntohl() */
 #define sys_ntohl(l)	((((l) << 24)  & 0xff000000)	\
@@ -122,7 +125,7 @@ typedef	unsigned int	uint32_t;
 #endif /* __GNUC__ */
 #endif	/* MIN */
 
-#if __STDC_VERSION__ >= 199901L
+#if __STDC_VERSION__ >= 199901L || __cplusplus >= 201103L
 #ifndef SIZE_MAX
 #define SIZE_MAX   ((~((size_t)0)) >> 1)
 #endif
@@ -142,7 +145,7 @@ typedef	unsigned int	uint32_t;
 #define RSSIZE_MAX   ((ssize_t)(RSIZE_MAX >> 1))
 #endif
 
-#if __STDC_VERSION__ >= 199901L
+#if __STDC_VERSION__ >= 199901L || __cplusplus >= 201103L
 #define ASN_PRI_SIZE "zu"
 #define ASN_PRI_SSIZE "zd"
 #define ASN_PRIuMAX PRIuMAX

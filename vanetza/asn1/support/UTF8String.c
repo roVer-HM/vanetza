@@ -35,6 +35,11 @@ asn_TYPE_operation_t asn_OP_UTF8String = {
     0,
     0,
 #endif  /* !defined(ASN_DISABLE_XER_SUPPORT) */
+#if !defined(ASN_DISABLE_JER_SUPPORT)
+    OCTET_STRING_encode_jer_utf8,
+#else
+    0,
+#endif  /* !defined(ASN_DISABLE_JER_SUPPORT) */
 #if !defined(ASN_DISABLE_OER_SUPPORT)
     OCTET_STRING_decode_oer,
     OCTET_STRING_encode_oer,
@@ -151,10 +156,10 @@ UTF8String_constraint(const asn_TYPE_descriptor_t *td, const void *sptr,
 
 static ssize_t
 UTF8String__process(const UTF8String_t *st, uint32_t *dst, size_t dstlen) {
-	size_t length;
-	uint8_t *buf = st->buf;
-	uint8_t *end = buf + st->size;
-	uint32_t *dstend = dst + dstlen;
+	size_t length = 0;
+	uint8_t *buf = (st == NULL)? NULL : st->buf;
+	uint8_t *end = (buf == NULL)? NULL : buf + st->size;
+	uint32_t *dstend = (dst == NULL)? NULL : dst + dstlen;
 
 	for(length = 0; buf < end; length++) {
 		int ch = *buf;
